@@ -18,6 +18,11 @@
 
     emotes.py: main functionality for spitting out emotes
 '''
+
+import zlib
+import asyncio
+import aiofiles
+
 import math
 import zipfile
 import sys
@@ -25,6 +30,7 @@ import numpy as np
 from scipy.spatial import KDTree 
 from pathlib import Path
 from PIL import Image, ImageSequence
+from concurrent.futures import ThreadPoolExecutor
 
 class RadioLibException(Exception):
     pass
@@ -70,9 +76,6 @@ EX_FAIL = 1
 '''
 FILE HANDLING
 '''
-def sort_files_for_pk3(f):
-    return (f.name != EMOTE_DEF_NAME and f.name != ATLAS_DEF_NAME, f.name)
-
 def create_atlas(images: list, atlas_size: tuple, rows_and_columns: tuple):
     atlas = Image.new("RGBA", atlas_size, (255, 255, 255, 0))
 
@@ -103,18 +106,20 @@ def create_pk3():
     # if the PK3 already exists, delete it and start from scratch again
     if (pk3_full_path.exists()):
         pk3_full_path.unlink()
-        print("Found existing emotes.pk3, deleting and building from scratch")
+        print("\nFound existing emotes.pk3, deleting and building from scratch")
         
     # Create that PK3
+    total_zipped_files = 0
+    total_emotes = len(list(tmp_dir.glob('*')))
     with zipfile.ZipFile(pk3_full_path, 'w', compression=zipfile.ZIP_DEFLATED) as pk3:
         for item in tmp_dir.iterdir():
             if (item.is_dir()):
-                print(f"Zipping {item.name}")
+                print(end="\033[2K")
 
-                # The configuration lumps have to come before the images
-                sorted_files = sorted(item.iterdir(), key=sort_files_for_pk3)
-                for file in sorted_files:
+                for file in item.iterdir():
                     pk3.write(file, arcname=f"{item.name}/{file.name}")
+                total_zipped_files+= 1
+                print(f"[{total_zipped_files}/{total_emotes}] Zipping {item.name}", end="\r")
 
 def empty_temp(tmp_path: Path):
     import shutil
@@ -292,10 +297,8 @@ def remap_static_image(png: Path):
     #e.g. joy
     return map_image(Image.open(png))
 
-def handle_static_image(png: Path):
+def _static_image(png: Path):
     emote_name = png.parent.name
-
-    print(f"Handling static emote '{emote_name}'...")
 
     if (not validaite_emote_name(emote_name)):
         return
@@ -306,18 +309,22 @@ def handle_static_image(png: Path):
 
     # remap the PNG and save
     mapped_frame = remap_static_image(png)
-    mapped_frame.save(f"{str(new_path)}/EMOTE0001.png", format="PNG")
+    mapped_frame.save(f"{str(new_path)}/FRAME001.png", format="PNG")
 
     print(f"Saved static emote '{emote_name}!")
 
+async def handle_static_image(png: Path):
+    try:
+        loop = asyncio.get_event_loop()
+        await loop.run_in_executor(None, _static_image, png)
+    except Exception as e:
+        print(f"Something went wrong processing {png}: {e}")
 
-def handle_gif(gif: Path):
+def _gif(gif: Path):
     gif_img = Image.open(gif)
 
     #e.g kekw
     emote_name = gif.parent.name
-
-    print(f"Handling animated emote '{emote_name}'...")
 
     if(not validaite_emote_name(emote_name)):
         return
@@ -336,7 +343,7 @@ def handle_gif(gif: Path):
         # Passively-aggressively inform them
         print(f'{gif} only has one frame..')
 
-        handle_static_image(gif)
+        _static_image(gif)
     elif (frames <= 0):
         print(f'{gif} doesn\'t have any frames! Wow! Skipping!')
         return
@@ -359,12 +366,19 @@ def handle_gif(gif: Path):
             gif_img.seek(i)
             mapped_frame = map_image(gif_img, transparency_index)
 
-            # SRB2 supports PNG patches, thank God
-            mapped_frame.save(f"{str(new_path)}/EMOTE{i:03d}.png", format="PNG")
+            # SRB2 2.1> supports PNG patches, thank God
+            mapped_frame.save(f"{str(new_path)}/FRAME{i:03d}.png", format="PNG")
 
         print(f"Saved animated emote '{emote_name}', with {frames} frames!")
 
-def handle_atlas(images: list[Path]):
+async def handle_gif(gif: Path):
+    try:
+        loop = asyncio.get_event_loop()
+        await loop.run_in_executor(None, _gif, gif)
+    except Exception as e:
+        print(f"Something went wrong processing {gif}: {e}")
+
+def _atlas(images: list[Path]):
     atlas_name = images[0].parent.name
     print(f"Parsing atlas for '{atlas_name}'...")
     
@@ -402,7 +416,7 @@ def handle_atlas(images: list[Path]):
         # find the smallest square number, so sqrt the length of images
         # 7 images? sqrt 7 = 3 (rounded up). so 3 rows, 3 columns. 7 images, with 2 empty slots
 
-        # math.ceil adds more space than neeeded, so manually round up
+        # math.ceil adds more space than needed, so manually round up
         columns = int((num_images ** 0.5) + 0.5)
         rows = (num_images + columns - 1) // columns
         atlas_size = (columns * width, rows * height)
@@ -419,6 +433,13 @@ def handle_atlas(images: list[Path]):
 
     print(f"Saved atlas emote '{atlas_name}', with {num_images} emotes!")
 
+async def handle_atlas(images: list[Path]):
+    try:
+        loop = asyncio.get_event_loop()
+        await loop.run_in_executor(None, _atlas, images)
+    except Exception as e:
+        print(f"Something went wrong processing atlas images in {images[0].parent}: {e}")
+
 
 '''
 Parse each subfolder in the provided directory and check for three scenarios.
@@ -432,15 +453,11 @@ Parse each subfolder in the provided directory and check for three scenarios.
 
 The emote configurations will be dynamically built depending on the scenario.
 '''
-def parse_folder(folder: Path):
+async def parse_folder(folder: Path):
     gifs = []
     images = []
 
-    # Loop over file in the folder (if it's an image) and append to the appropriate list
-    for file in folder.iterdir():
-        if not file.is_file():
-            continue
-            
+    def is_file_image(file: Path):
         try:
             with Image.open(file) as img:
                 format = img.format
@@ -449,11 +466,20 @@ def parse_folder(folder: Path):
                 elif format == "PNG" or format == "JPG":
                     images.append(file)
         except Exception:
+            pass
+    
+    # Loop over file in the folder (if it's an image) and append to the appropriate list
+    tasks = []
+    for file in folder.iterdir():
+        if not file.is_file():
             continue
 
+        task = asyncio.to_thread(is_file_image, file)
+        tasks.append(task)
+
+    await asyncio.gather(*tasks)
+
     valid = False
-    
-    print(f'Parsing subfolder {folder}:')
     if (len(gifs) > 1):    
         # Too many GIFs, expecting just one
         print(f"Too many GIFs found in '{folder.name}', there only needs to be one. Skipping.")
@@ -461,30 +487,29 @@ def parse_folder(folder: Path):
     elif len(gifs) == 1:
         # Handle GIF
         valid = True
-        handle_gif(gifs[0])
+        await handle_gif(gifs[0])
         return
         
     if (len(images) > 0):
         if (len(images) > 1):
             # Handle emote atlas
             valid = True
-            handle_atlas(images)
+            await handle_atlas(images)
         else:
             # Handle static emote
             valid = True
-            handle_static_image(images[0])
+            await handle_static_image(images[0])
     
     if (not valid):
         print(f'{folder} doesn\'t have any valid images, skipping')
         return
-
 
 '''
 EMOTE HANDLING
 '''
 
 # Let's start here
-def main():
+async def main():
     import argparse
 
     parser = argparse.ArgumentParser(epilog='Use the \'examples\' folder as a reference point.',
@@ -535,7 +560,7 @@ Intended for use with the custom DRRR build, RadioRacers.
             empty_temp(temp_dir)
 
         for subdir in subdirectories:
-            parse_folder(subdir)
+            await parse_folder(subdir)
 
         # Once we're done, create the PK3
         if (not any(temp_dir.iterdir())):
@@ -549,4 +574,4 @@ Intended for use with the custom DRRR build, RadioRacers.
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    asyncio.run(main())
