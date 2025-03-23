@@ -167,6 +167,9 @@ def validaite_emote_name(emote_name: str):
     if (len(emote_name) > EMOTE_NAME_SIZE):
         print(f"'{emote_name}' is longer than {EMOTE_NAME_SIZE} characters, shorten it.")
         return False
+    if(' ' in emote_name):
+        print(f"'{emote_name} can't have any whitespace characters.")
+        return False
     return True
     
 '''
