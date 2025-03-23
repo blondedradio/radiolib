@@ -2,7 +2,7 @@
 
 An assortment of library scripts to complement any features for [RadioRacers](https://github.com/blondedradio/RadioRacers), a DRRR* fork.
 
-<small>*An acryonym for the Kart Racer, [Dr. Robotnik's Ring Racers](https://www.kartkrew.org/).</small>
+<sup>*An acryonym for the Kart Racer, [Dr. Robotnik's Ring Racers](https://www.kartkrew.org/).</sup>
 
 ## How to get started
 
