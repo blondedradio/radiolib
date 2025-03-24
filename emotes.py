@@ -282,7 +282,7 @@ def save_config(text: str, path: Path):
     configured_emote.write_text(f"{text}\n\n{AUTO_GENERATED_COMMENT}")
 
 def save_static_config(emote_name: str, path: Path):
-    save_config(f"{EMOTE_DEF_NAME_KEY} = {emote_name}\n{EMOTE_DEF_TICS_KEY} = 1", path)
+    save_config(f"{EMOTE_DEF_NAME_KEY} = {emote_name}", path)
 
 def save_animated_config(frame_delay: int, emote_name: str, path: Path):
     tics_delay = get_frame_delay_in_tics(frame_delay)    
