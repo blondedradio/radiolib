@@ -428,6 +428,8 @@ def _atlas(images: list[Path]):
     # Start with a minimum of .. 4 emotes, before the atlas needs more than one row
     if (num_images < 5):
         atlas_size = ((num_images * width), height)
+        rows = 1
+        columns = 4
     else:
         # Keep the atlas as square as possible, this isn't a requirement, it's just convenient
         # find the smallest square number, so sqrt the length of images
